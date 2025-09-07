@@ -45,8 +45,9 @@ def main():
     
     # Normalize coordinates for model
     coords = spatial_coords.astype(np.float32)
-    coords = coords - coords.min(axis=0)
-    coords = coords / coords.max() * 100 if coords.max() > 0 else coords
+    coords[:, 0] = coords[:, 0] - coords[:, 0].min()
+    coords[:, 1] = coords[:, 1] - coords[:, 1].min()
+    coords = coords / coords.max() * 100
     
     # Process expression - compute HVG before normalization
     sc.pp.highly_variable_genes(adata, n_top_genes=300, subset=False, flavor='seurat_v3')
@@ -55,13 +56,11 @@ def main():
     
     # Filter genes by vocabulary
     hvg_genes = adata.var_names[adata.var['highly_variable']].tolist()
-    filtered_genes = [g for g in hvg_genes if g in tokenizer.gene_vocab]
-    gene_ids = [tokenizer.gene_vocab[g] for g in filtered_genes]
+    vocab_genes = [g for g in tokenizer.get_stoi().keys() if not g.startswith("<")]
+    filtered_genes = [g for g in hvg_genes if g in vocab_genes][:config.model.n_genes]
     
-    gene_exp = adata[:, filtered_genes].X
-    if hasattr(gene_exp, 'toarray'):
-        gene_exp = gene_exp.toarray()
-    gene_exp = gene_exp.astype(np.float32)
+    gene_ids = [tokenizer.gene_vocab[g] for g in filtered_genes]
+    gene_exp = adata[:, filtered_genes].X.toarray().astype(np.float32)
     
     # Direct full-slide inference without partitioning
     n_spots = len(coords)
@@ -73,22 +72,18 @@ def main():
     gene_ids_t = torch.tensor(gene_ids).long()
     
     # Pad genes to match model config
-    if len(gene_ids_t) < n_genes:
-        pad_len = n_genes - len(gene_ids_t)
-        gene_ids_t = torch.cat([gene_ids_t, torch.zeros(pad_len, dtype=torch.long)])
-        gene_exp_t = torch.cat([gene_exp_t, torch.zeros(n_spots, pad_len)], dim=1)
-    else:
-        gene_ids_t = gene_ids_t[:n_genes]
-        gene_exp_t = gene_exp_t[:, :n_genes]
+    pad_len = n_genes - len(gene_ids_t)
+    gene_ids_t = torch.cat([gene_ids_t, torch.zeros(pad_len, dtype=torch.long)])
+    gene_exp_t = torch.cat([gene_exp_t, torch.zeros(n_spots, pad_len)], dim=1)
     
     # Create batch
     batch_gene_ids = gene_ids_t.unsqueeze(0).expand(1, n_spots, -1)  # [1, n_spots, n_genes]
     batch_gene_exp = gene_exp_t.unsqueeze(0)  # [1, n_spots, n_genes]
     
-    # Get features for the entire slide at once
+    # Get features for the entire slide
     with torch.no_grad():
         features = model.model.encode(batch_gene_ids, batch_gene_exp, coords_t)
-        features = features.squeeze(0).numpy()  # [n_spots, d_model]
+        features = features.squeeze(0).numpy()
     
     # Store features in adata
     adata.obsm['X_mae'] = features

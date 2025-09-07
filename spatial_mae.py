@@ -501,7 +501,7 @@ class SpatialMAE(nn.Module):
         padding_idx: int = 0,
         anchor_k: int = 0,
         use_anchor_loss: bool = False,
-        anchor_loss_weight: float = 0.2,
+        anchor_loss_weight: float = 0.05,
     ):
         super().__init__()
         self.vocab_size = vocab_size
