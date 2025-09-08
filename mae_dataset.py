@@ -72,8 +72,6 @@ class MAESTDataset(Dataset):
         log1p: bool = True,
         max_gene_len: int = 2000,
         patches_per_slide: int = 100,
-        anchor_k: int = 16,
-        anchor_method: str = 'kmeans++',
     ):
         """
         Initialize MAE dataset
@@ -100,8 +98,6 @@ class MAESTDataset(Dataset):
         self.log1p = log1p
         self.max_gene_len = max_gene_len
         self.patches_per_slide = patches_per_slide
-        self.anchor_k = anchor_k
-        self.anchor_method = anchor_method
         
         # Initialize tokenizer
         if tokenizer is None:
@@ -135,28 +131,9 @@ class MAESTDataset(Dataset):
         for dataset in tqdm(self.dataset_list):
             stdata = self.load_dataset(dataset)
             if stdata is not None:
-                # compute anchors per slide
-                anchors = self._compute_anchors(stdata.coords, self.anchor_k, self.anchor_method)
-                stdata.anchors = torch.from_numpy(anchors).float()
                 self.st_datasets.append(stdata)        
         print(f"Successfully loaded {len(self.st_datasets)}/{len(dataset_list)} datasets")
 
-    def _compute_anchors(self, coords: torch.Tensor, k: int, method: str = 'kmeans++', seed: int = 42):
-        """Compute per-slide global anchors from coordinates.
-        Returns numpy array of shape [k, 2] in the same scale as input coords.
-        """
-        coords_np = coords.detach().cpu().numpy()
-        n = len(coords_np)
-        k = min(k, max(1, n))
-        if method == 'kmeans++':
-            # Use KMeans with k-means++ init; fall back to n_init=10 for broad sklearn compatibility
-            km = KMeans(n_clusters=k, init='k-means++', n_init=10, random_state=seed)
-            km.fit(coords_np)
-            return km.cluster_centers_.astype(coords_np.dtype)
-        else:
-            # Fallback: random sample as anchors
-            idx = np.random.default_rng(seed).choice(n, size=k, replace=(k>n))
-            return coords_np[idx]
     
     def _compute_global_hvgs(self) -> List[str]:
         """
@@ -261,7 +238,6 @@ class MAESTDataset(Dataset):
             'gene_exp': gene_exp,  # [n_spots, max_gene_len]
             'coords': coords,  # [n_spots, 2]
             'gene_ids': gene_ids,  # [max_gene_len]
-            'anchors': st_data.anchors,  # [K, 2]
         }
 
 
@@ -269,7 +245,6 @@ def mae_collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     gene_exp = torch.stack([s['gene_exp'] for s in batch])  # [B, n_spots, max_gene_len]
     coords = torch.stack([s['coords'] for s in batch])  # [B, n_spots, 2]
     gene_ids = torch.stack([s['gene_ids'] for s in batch])  # [B, max_gene_len]
-    anchors = torch.stack([s['anchors'] for s in batch])  # [B, K, 2]
     
     # Expand gene_ids to match spatial dimensions: [B, max_gene_len] -> [B, n_spots, max_gene_len]
     batch_size, n_spots, n_genes = gene_exp.shape
@@ -279,7 +254,6 @@ def mae_collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         'gene_values': gene_exp,  # Rename to match Lightning module interface
         'coords': coords,
         'gene_ids': gene_ids,
-        'anchors': anchors,
     }
 
 

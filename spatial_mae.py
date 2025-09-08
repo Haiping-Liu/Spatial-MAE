@@ -387,13 +387,11 @@ class SpatialMAEDecoder(nn.Module):
         n_layers: int = 2,
         n_heads: int = 4,
         dropout: float = 0.1,
-        anchor_k: int = 0,
     ):
         super().__init__()
         self.n_genes = n_genes
         self.d_model = d_model
         self.d_decoder = d_decoder
-        self.anchor_k = anchor_k
         
         # Mask token
         self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
@@ -418,23 +416,13 @@ class SpatialMAEDecoder(nn.Module):
         
         # Output projection
         self.output_proj = nn.Linear(d_decoder, n_genes)
-        
-        # Optional anchor distance head: predict distances to K anchors per spot
-        if anchor_k and anchor_k > 0:
-            self.anchor_dist_head = nn.Sequential(
-                nn.Linear(d_decoder, d_decoder),
-                nn.GELU(),
-                nn.Linear(d_decoder, anchor_k)
-            )
-        else:
-            self.anchor_dist_head = None
     
     def forward(
         self,
         encoded_features: torch.Tensor,
         coords: torch.Tensor,
         mask_info: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> torch.Tensor:
         """
         Args:
             encoded_features: [bs, n_visible, d_model] - encoder output for visible positions
@@ -476,13 +464,7 @@ class SpatialMAEDecoder(nn.Module):
         # Predict gene expression for all positions
         predictions = self.output_proj(decoder_features)  # [bs, n_spots, n_genes]
         
-        # Optional: predict distances to global anchors per spot
-        anchor_dist_pred = None
-        if self.anchor_dist_head is not None:
-            # Non-negative distances are encouraged via relu at loss time; here leave raw
-            anchor_dist_pred = self.anchor_dist_head(decoder_features)  # [bs, n_spots, K]
-        
-        return predictions, anchor_dist_pred
+        return predictions
 
 
 class SpatialMAE(nn.Module):
@@ -499,17 +481,11 @@ class SpatialMAE(nn.Module):
         dropout: float = 0.1,
         mask_ratio: float = 0.75,
         padding_idx: int = 0,
-        anchor_k: int = 0,
-        use_anchor_loss: bool = False,
-        anchor_loss_weight: float = 0.05,
     ):
         super().__init__()
         self.vocab_size = vocab_size
         self.n_genes = n_genes
         self.mask_ratio = mask_ratio
-        self.anchor_k = anchor_k
-        self.use_anchor_loss = use_anchor_loss and (anchor_k is not None and anchor_k > 0)
-        self.anchor_loss_weight = anchor_loss_weight
         
         self.encoder = SpatialMAEEncoder(
             vocab_size=vocab_size,
@@ -528,8 +504,7 @@ class SpatialMAE(nn.Module):
             d_decoder=d_decoder,
             n_layers=n_decoder_layers,
             n_heads=n_heads // 2,
-            dropout=dropout,
-            anchor_k=anchor_k,
+            dropout=dropout
         )
     
     def generate_random_mask(self, batch_size: int, n_spots: int, mask_ratio: float, device: torch.device) -> Dict[str, torch.Tensor]:
@@ -575,7 +550,6 @@ class SpatialMAE(nn.Module):
         gene_exp: torch.Tensor,
         coords: torch.Tensor,
         mask_info: Optional[Dict[str, torch.Tensor]] = None,
-        anchors: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Args:
@@ -596,7 +570,7 @@ class SpatialMAE(nn.Module):
             mask_info = self.generate_random_mask(bs, n_spots, self.mask_ratio, gene_exp.device)
         
         encoded_features, mask_info = self.encoder(gene_ids, gene_exp, coords, mask_info)
-        predictions, anchor_dist_pred = self.decoder(encoded_features, coords, mask_info)
+        predictions = self.decoder(encoded_features, coords, mask_info)
         
         mask = mask_info['mask']
         if mask.any():
@@ -608,20 +582,6 @@ class SpatialMAE(nn.Module):
             # This makes the model work as a standard autoencoder
             loss = F.mse_loss(predictions, gene_exp)
         
-        # Auxiliary: anchor distance loss on masked positions only
-        if self.use_anchor_loss and anchors is not None and anchor_dist_pred is not None:
-            # Normalize coordinates to [0,1] based on dataset scaling (~[0,100])
-            bs = coords.shape[0]
-            masked_indices = mask_info['masked_indices']  # [bs, n_mask]
-            batch_idx = torch.arange(bs, device=coords.device).unsqueeze(1)
-            # True distances: [bs, n_mask, K]
-            masked_coords = coords[batch_idx, masked_indices]  # [bs, n_mask, 2]
-            true_dist = torch.cdist(masked_coords, anchors, p=2)
-            # Predicted distances at masked positions
-            pred_dist = anchor_dist_pred[batch_idx, masked_indices]  # [bs, n_mask, K]
-            anchor_loss = F.smooth_l1_loss(pred_dist, true_dist)
-            loss = loss + self.anchor_loss_weight * anchor_loss
-            return predictions, loss, mask_info, self.anchor_loss_weight * anchor_loss
         
         return predictions, loss, mask_info
     

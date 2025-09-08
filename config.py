@@ -22,8 +22,6 @@ class ModelConfig:
     mask_ratio: float = 0.75
     max_value: int = 512
     padding_idx: int = 0     # Padding token index
-    # Anchor-based auxiliary loss
-    anchor_k: int = 16       # number of global anchors per slide
 
 
 @dataclass
@@ -45,9 +43,6 @@ class DatasetConfig:
     train_ratio: float = 0.8
     val_ratio: float = 0.1
     test_ratio: float = 0.1
-    # Anchors for auxiliary loss
-    anchor_k: int = 16
-    anchor_method: str = 'kmeans++'  # 'kmeans++' or 'fps' (future)
 
 
 @dataclass
@@ -89,9 +84,6 @@ class TrainingConfig:
     loss_type: str = 'mse'  # 'mse', 'mae', 'huber'
     huber_delta: float = 1.0
     
-    # Anchor auxiliary loss control
-    use_anchor_loss: bool = True
-    anchor_loss_weight: float = 0.2
 
 
 @dataclass

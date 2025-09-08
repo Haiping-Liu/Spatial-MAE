@@ -27,9 +27,6 @@ class SpatialMAELightning(pl.LightningModule):
             dropout=config.model.dropout,
             mask_ratio=config.model.mask_ratio,
             padding_idx=config.model.padding_idx,
-            anchor_k=config.model.anchor_k,
-            use_anchor_loss=getattr(config.training, 'use_anchor_loss', True),
-            anchor_loss_weight=getattr(config.training, 'anchor_loss_weight', 0.2),
         )
     
     def forward(
@@ -37,33 +34,28 @@ class SpatialMAELightning(pl.LightningModule):
         gene_ids: torch.Tensor,
         gene_values: torch.Tensor,
         coords: torch.Tensor,
-        anchors: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
-        return self.model(gene_ids, gene_values, coords, anchors=anchors)
+        return self.model(gene_ids, gene_values, coords)
     
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step"""
-        _, loss, _, anchor_loss = self.model(
+        _, loss, _ = self.model(
             batch['gene_ids'], 
             batch['gene_values'], 
-            batch['coords'],
-            anchors=batch.get('anchors', None)
+            batch['coords']
         )
         # Log with sync_dist=True for proper epoch-level aggregation
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train_anchor_loss', anchor_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
     
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Validation step"""
-        _, loss, _, anchor_loss = self.model(
+        _, loss, _ = self.model(
             batch['gene_ids'], 
             batch['gene_values'], 
-            batch['coords'],
-            anchors=batch.get('anchors', None)
+            batch['coords']
         )
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_anchor_loss', anchor_loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
     
     def configure_optimizers(self):

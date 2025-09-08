@@ -57,8 +57,6 @@ class MAETrainer:
             log1p=self.config.dataset.log1p,
             max_gene_len=self.config.dataset.max_gene_len,
             patches_per_slide=self.config.dataset.patches_per_slide,
-            anchor_k=self.config.dataset.anchor_k,
-            anchor_method=self.config.dataset.anchor_method,
         )
         
         self.val_dataset = MAESTDataset(
@@ -72,8 +70,6 @@ class MAETrainer:
             log1p=self.config.dataset.log1p,
             max_gene_len=self.config.dataset.max_gene_len,
             patches_per_slide=self.config.dataset.patches_per_slide,
-            anchor_k=self.config.dataset.anchor_k,
-            anchor_method=self.config.dataset.anchor_method,
         )
         
         self.config.model.n_genes = self.config.dataset.max_gene_len
