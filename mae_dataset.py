@@ -190,8 +190,19 @@ class MAESTDataset(Dataset):
         
         # Apply HVG selection
         if self.global_hvgs is not None:
-            hvg_mask = adata.var.index.isin(self.global_hvgs)
-            adata = adata[:, hvg_mask].copy()
+            # Align to full global HVG order; fill missing genes with zeros
+            order = list(self.global_hvgs)
+            present = {g: i for i, g in enumerate(adata.var_names.tolist())}
+            X_src = adata.X.toarray() if hasattr(adata.X, 'toarray') else adata.X
+            X_full = np.zeros((X_src.shape[0], len(order)), dtype=X_src.dtype)
+            for j, g in enumerate(order):
+                i = present.get(g)
+                if i is not None:
+                    X_full[:, j] = X_src[:, i]
+            gene_names = order
+            gene_ids = self.tokenizer.encode_genes(gene_names)
+            gene_exp = torch.from_numpy(X_full).float()
+            return STData(coords, gene_exp, gene_ids, gene_names)
         
         # Get gene info
         gene_names = adata.var.index.tolist()

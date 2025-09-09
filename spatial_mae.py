@@ -114,12 +114,14 @@ class GeneAttentionLayer(nn.Module):
     def forward(
         self, 
         gene_tokens: torch.Tensor,
-        cls_token: torch.Tensor
+        cls_token: torch.Tensor,
+        gene_padding_mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             gene_tokens: [bs*n_spots, n_genes, d_model]
             cls_token: [bs*n_spots, 1, d_model]
+            gene_padding_mask: [bs*n_spots, n_genes] - True for padding positions
         Returns:
             gene_tokens: [bs*n_spots, n_genes, d_model]
             cls_features: [bs*n_spots, d_model]
@@ -127,8 +129,18 @@ class GeneAttentionLayer(nn.Module):
         # Concatenate CLS with gene tokens
         tokens = torch.cat([cls_token, gene_tokens], dim=1)  # [bs*n_spots, n_genes+1, d_model]
         
+        # Create attention mask if gene padding mask is provided
+        key_padding_mask = None
+        if gene_padding_mask is not None:
+            # Create mask for [CLS + genes]: CLS is never masked, genes can be masked
+            key_padding_mask = torch.zeros(
+                tokens.shape[0], tokens.shape[1], 
+                dtype=torch.bool, device=tokens.device
+            )
+            key_padding_mask[:, 1:] = gene_padding_mask  # Skip CLS (position 0)
+        
         # Self-attention
-        attn_out, _ = self.attention(tokens, tokens, tokens)
+        attn_out, _ = self.attention(tokens, tokens, tokens, key_padding_mask=key_padding_mask)
         tokens = self.norm1(tokens + self.dropout(attn_out))
         
         # FFN

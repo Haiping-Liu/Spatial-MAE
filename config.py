@@ -11,6 +11,7 @@ from omegaconf import OmegaConf, DictConfig
 @dataclass
 class ModelConfig:
     """Model architecture configuration"""
+    arch: str = 'mae'        # 'mae' or 'bert'
     vocab_size: int = 60000  # Vocabulary size for gene embeddings
     n_genes: int = 1000      # Number of genes per sample (sequence length)
     d_model: int = 256
@@ -22,6 +23,12 @@ class ModelConfig:
     mask_ratio: float = 0.75
     max_value: int = 512
     padding_idx: int = 0     # Padding token index
+    # BERT-style extras
+    spot_mask_ratio: float = 0.3           # ratio of spots to mask (for BERT path)
+    masking_mode: str = 'token'            # 'token' or 'noise'
+    noise_std: float = 0.0                 # gaussian noise std if masking_mode == 'noise'
+    n_gene_layers: int = 2                 # gene-level encoder layers to summarize per-spot
+    n_spot_layers: int = 4                 # spot-level transformer layers for context
 
 
 @dataclass
@@ -83,6 +90,7 @@ class TrainingConfig:
     # Loss
     loss_type: str = 'mse'  # 'mse', 'mae', 'huber'
     huber_delta: float = 1.0
+    coord_loss_weight: float = 1.0  # weight for coordinate regression loss in BERT path
     
 
 
