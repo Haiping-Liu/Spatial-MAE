@@ -1,27 +1,28 @@
 # Spatial BERT configuration for dual-task learning
 
 model:
+  arch: bert
   vocab_size: 60000
-  n_genes: 300
-  d_model: 96          # 保持较小的模型避免过拟合
-  n_layers: 3          # BERT层数
-  n_heads: 3           # 注意力头数
+  n_genes: 500
+  d_model: 96         
+  n_layers: 3       
+  n_heads: 3          
   dropout: 0.1       
-  expr_mask_ratio: 0.1  # 表达重建任务的mask比例
-  pos_mask_ratio: 0.1   # 坐标预测任务的mask比例
-  coord_noise_std: 10.0 # 坐标噪声标准差
+  expr_mask_ratio: 0.2
+  pos_mask_ratio: 0.2  
+  coord_noise_std: 10.0 
   max_value: 512
   padding_idx: 0
 
 dataset:
   data_dir: "/leonardo_work/EUHPC_B25_011/ST/DLPFC"
   n_spots: 512
-  n_hvg: 300         
+  n_hvg: 500         
   use_hvg: true
   sampling_method: "nearest"
   normalize_total: 10000.0
   log1p: true
-  max_gene_len: 300 
+  max_gene_len: 500 
   patches_per_slide: 50  
   batch_size: 4
   num_workers: 4
@@ -41,8 +42,8 @@ training:
   accumulate_grad_batches: 1
   
   # BERT loss weights
-  expr_weight: 1.0      # 表达重建任务权重
-  coord_weight: 0.1     # 坐标预测任务权重
+  expr_weight: 1.0        
+  coord_weight: 0.0001    
   
   optimizer: "adamw"
   adam_beta1: 0.9
@@ -57,8 +58,6 @@ training:
   patience: 20
   min_delta: 0.0001
   
-  loss_type: "dual_task"  # 区别于MAE的单任务
-
 logging:
   project_name: "spatial-bert"
   run_name: "dual_task_learning"

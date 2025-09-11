@@ -15,12 +15,18 @@ class ModelConfig:
     vocab_size: int = 60000  # Vocabulary size for gene embeddings
     n_genes: int = 1000      # Number of genes per sample (sequence length)
     d_model: int = 256
+    # BERT-specific shared dims
+    n_layers: int = 4              # for SpatialBERT
     d_decoder: int = 128
     n_encoder_layers: int = 6
     n_decoder_layers: int = 2
     n_heads: int = 8
     dropout: float = 0.1
     mask_ratio: float = 0.75
+    # SpatialBERT masking params
+    expr_mask_ratio: float = 0.1
+    pos_mask_ratio: float = 0.1
+    coord_noise_std: float = 10.0
     max_value: int = 512
     padding_idx: int = 0     # Padding token index
     # BERT-style extras
@@ -88,9 +94,12 @@ class TrainingConfig:
     min_delta: float = 1e-4
     
     # Loss
-    loss_type: str = 'mse'  # 'mse', 'mae', 'huber'
+    loss_type: str = 'mse'  # 'mse', 'mae', 'huber', 'dual_task'
     huber_delta: float = 1.0
-    coord_loss_weight: float = 1.0  # weight for coordinate regression loss in BERT path
+    coord_loss_weight: float = 0.001  # weight for coordinate regression loss in MAE path
+    # BERT dual-task loss weights
+    expr_weight: float = 1.0
+    coord_weight: float = 0.1
     
 
 

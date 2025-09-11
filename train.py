@@ -10,7 +10,7 @@ from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
 from config import Config
-from module import SpatialMAELightning
+from module import SpatialMAELightning, SpatialBERTLightning
 from mae_dataset import MAESTDataset, DatasetPath, mae_collate_fn
 from mae_tokenizer import get_default_mae_tokenizer
 
@@ -71,8 +71,23 @@ class MAETrainer:
             max_gene_len=self.config.dataset.max_gene_len,
             patches_per_slide=self.config.dataset.patches_per_slide,
         )
-        
+
         self.config.model.n_genes = self.config.dataset.max_gene_len
+
+        # Persist the global HVG order for evaluation reproducibility
+        try:
+            save_dir = Path(self.config.logging.save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            if getattr(self.train_dataset, 'global_hvgs', None):
+                hvgs = list(self.train_dataset.global_hvgs)
+                # Save gene names
+                (save_dir / 'global_hvgs.txt').write_text('\n'.join(hvgs))
+                # Save token ids aligned to the same order
+                hvgs_ids = self.train_dataset.tokenizer.encode_genes(hvgs)
+                (save_dir / 'global_hvgs_ids.txt').write_text('\n'.join(map(str, hvgs_ids)))
+        except Exception as e:
+            # Non-fatal: continue training even if saving fails
+            print(f"Warning: failed to persist global HVGs: {e}")
         
         self.train_loader = DataLoader(
             self.train_dataset,
@@ -92,7 +107,10 @@ class MAETrainer:
         )
     
     def setup_model(self):
-        self.model = SpatialMAELightning(self.config)
+        if getattr(self.config.model, 'arch', 'mae') == 'bert':
+            self.model = SpatialBERTLightning(self.config)
+        else:
+            self.model = SpatialMAELightning(self.config)
     
     def setup_callbacks(self):
         callbacks = [

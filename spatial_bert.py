@@ -193,8 +193,10 @@ class SpatialBERT(nn.Module):
         n_vis = gene_tokens.shape[0]
         cls_tokens = self.cls_token.expand(n_vis, 1, self.d_model)
 
-        # Fill expression-masked spots with mask token
-        spot_embeddings[expr_mask] = self.mask_spot_token
+        # Fill expression-masked spots with mask token (explicit expand to match rows)
+        num_masked = int(expr_mask.sum())
+        if num_masked > 0:
+            spot_embeddings[expr_mask] = self.mask_spot_token.expand(num_masked, -1)
         
         # Get positional encoding (using noisy coordinates)
         pos_encoding = self.pos_encoder(noisy_coords)
@@ -232,22 +234,25 @@ def compute_bert_loss(
     coord_weight: float = 0.1,
 ) -> Dict[str, torch.Tensor]:
     losses = {}
-    
-    # Expression reconstruction loss
+
+    # Expression reconstruction loss (optional)
     expr_pred = predictions.get('expr_pred')
     expr_mask = predictions.get('expr_mask')
-    expr_target = gene_values[expr_mask]
-    expr_loss = F.mse_loss(expr_pred, expr_target)
-    losses['expr_loss'] = expr_loss
+    if expr_pred is not None and expr_mask is not None and expr_mask.any():
+        expr_target = gene_values[expr_mask]
+        losses['expr_loss'] = expr_weight * F.mse_loss(expr_pred, expr_target)
+    else:
+        losses['expr_loss'] = torch.tensor(0.0, device=gene_values.device)
 
-    # Coordinate prediction loss  
+    # Coordinate prediction loss (optional)
     coord_pred = predictions.get('coord_pred')
     original_coords = predictions.get('original_coords')
-    coord_loss = F.mse_loss(coord_pred, original_coords)
-    losses['coord_loss'] = coord_loss
-    
+    if coord_pred is not None and original_coords is not None and original_coords.numel() > 0:
+        losses['coord_loss'] = coord_weight * F.mse_loss(coord_pred, original_coords)
+    else:
+        losses['coord_loss'] = torch.tensor(0.0, device=gene_values.device)
+
     # Total loss
-    total_loss = expr_weight * losses['expr_loss'] + coord_weight * losses['coord_loss']
-    losses['total_loss'] = total_loss
-    
+    losses['total_loss'] = losses['expr_loss'] + losses['coord_loss']
+
     return losses

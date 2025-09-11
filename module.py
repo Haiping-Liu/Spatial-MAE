@@ -120,11 +120,33 @@ class SpatialBERTLightning(pl.LightningModule):
         return self.model(gene_ids, gene_values, coords, expr_mask, pos_mask)
     
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Training step with dual-task loss"""
+        """Training step with dual-task loss and mask sampling"""
+        gene_ids = batch['gene_ids']
+        gene_values = batch['gene_values']
+        coords = batch['coords']
+
+        # Sample masks (train/val use the same simple logic). Ensure non-empty sets.
+        B, N, _ = coords.shape
+        device = coords.device
+        expr_ratio = getattr(self.model, 'expr_mask_ratio', 0.2)
+        pos_ratio = getattr(self.model, 'pos_mask_ratio', 0.1)
+
+        # Vectorized, exact-count, mutually-exclusive masks
+        n_expr = max(1, int(expr_ratio * N))
+        n_pos = max(1, int(pos_ratio * N))
+        noise = torch.rand(B, N, device=device)
+        idx = noise.argsort(dim=1)
+        expr_idx = idx[:, :n_expr]
+        pos_idx = idx[:, n_expr:n_expr + n_pos]
+        expr_mask = torch.zeros(B, N, dtype=torch.bool, device=device).scatter(1, expr_idx, True)
+        pos_mask = torch.zeros(B, N, dtype=torch.bool, device=device).scatter(1, pos_idx, True)
+
         predictions = self.model(
-            batch['gene_ids'], 
-            batch['gene_values'], 
-            batch['coords']
+            gene_ids,
+            gene_values,
+            coords,
+            expr_mask=expr_mask,
+            pos_mask=pos_mask,
         )
         
         # Compute dual-task loss
@@ -137,17 +159,38 @@ class SpatialBERTLightning(pl.LightningModule):
         
         # Log all losses
         self.log('train_loss', losses['total_loss'], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train_expr_loss', losses['expr_loss'], on_step=True, on_epoch=True, sync_dist=True)
-        self.log('train_coord_loss', losses['coord_loss'], on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_expr_loss', losses['expr_loss'], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train_coord_loss', losses['coord_loss'], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return losses['total_loss']
     
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Validation step"""
+        """Validation step with the same mask sampling as training"""
+        gene_ids = batch['gene_ids']
+        gene_values = batch['gene_values']
+        coords = batch['coords']
+
+        B, N, _ = coords.shape
+        device = coords.device
+        expr_ratio = getattr(self.model, 'expr_mask_ratio', 0.1)
+        pos_ratio = getattr(self.model, 'pos_mask_ratio', 0.1)
+
+        # Vectorized, exact-count, mutually-exclusive masks
+        n_expr = max(1, int(expr_ratio * N))
+        n_pos = max(1, int(pos_ratio * N))
+        noise = torch.rand(B, N, device=device)
+        idx = noise.argsort(dim=1)
+        expr_idx = idx[:, :n_expr]
+        pos_idx = idx[:, n_expr:n_expr + n_pos]
+        expr_mask = torch.zeros(B, N, dtype=torch.bool, device=device).scatter(1, expr_idx, True)
+        pos_mask = torch.zeros(B, N, dtype=torch.bool, device=device).scatter(1, pos_idx, True)
+
         predictions = self.model(
-            batch['gene_ids'], 
-            batch['gene_values'], 
-            batch['coords']
+            gene_ids,
+            gene_values,
+            coords,
+            expr_mask=expr_mask,
+            pos_mask=pos_mask,
         )
         
         # Compute dual-task loss
@@ -160,8 +203,8 @@ class SpatialBERTLightning(pl.LightningModule):
         
         # Log validation losses
         self.log('val_loss', losses['total_loss'], on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_expr_loss', losses['expr_loss'], on_step=False, on_epoch=True)
-        self.log('val_coord_loss', losses['coord_loss'], on_step=False, on_epoch=True)
+        self.log('val_expr_loss', losses['expr_loss'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_coord_loss', losses['coord_loss'], on_step=False, on_epoch=True, prog_bar=True)
         
         return losses['total_loss']
     
