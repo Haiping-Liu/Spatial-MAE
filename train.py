@@ -9,10 +9,11 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, Learning
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
-from config import Config
-from module import SpatialMAELightning, SpatialBERTLightning
-from mae_dataset import MAESTDataset, DatasetPath, mae_collate_fn
-from mae_tokenizer import get_default_mae_tokenizer
+from configs.config import Config
+from module.mae_module import SpatialMAELightning
+from module.bert_module import SpatialBERTLightning
+from data.dataset import MAESTDataset, DatasetPath, mae_collate_fn
+from data.tokenizer import get_default_mae_tokenizer
 
 
 class MAETrainer:    
@@ -176,7 +177,7 @@ class MAETrainer:
 
 def main():
     parser = argparse.ArgumentParser(description="Train Spatial MAE")
-    parser.add_argument('--config', type=str, default='configs/antioverfit.yaml', help='Path to config file')
+    parser.add_argument('--config', type=str, default='configs/bert_config.yaml', help='Path to config file')
     args = parser.parse_args()
     
     trainer = MAETrainer(args.config)

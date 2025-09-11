@@ -8,9 +8,12 @@ model:
   n_layers: 3       
   n_heads: 3          
   dropout: 0.1       
-  expr_mask_ratio: 0.2
-  pos_mask_ratio: 0.2  
-  coord_noise_std: 10.0 
+  gene_mask_ratio: 0.15   # Mask 15% of valid genes per spot
+  noise_scale: 0.1        # Noise scale for masked genes
+  
+  # Topology learning parameters
+  k_neighbors: 6          # Number of nearest neighbors for adjacency matrix
+  ema_decay: 0.99         # Initial EMA decay (will increase to 0.9995) 
   max_value: 512
   padding_idx: 0
 
@@ -40,10 +43,6 @@ training:
   max_epochs: 100
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  
-  # BERT loss weights
-  expr_weight: 1.0        
-  coord_weight: 0.0001    
   
   optimizer: "adamw"
   adam_beta1: 0.9

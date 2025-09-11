@@ -10,32 +10,26 @@ from omegaconf import OmegaConf, DictConfig
 
 @dataclass
 class ModelConfig:
-    """Model architecture configuration"""
-    arch: str = 'mae'        # 'mae' or 'bert'
+    """Model architecture configuration for Spatial BERT"""
+    arch: str = 'bert'       # Model architecture type
     vocab_size: int = 60000  # Vocabulary size for gene embeddings
-    n_genes: int = 1000      # Number of genes per sample (sequence length)
-    d_model: int = 256
-    # BERT-specific shared dims
-    n_layers: int = 4              # for SpatialBERT
-    d_decoder: int = 128
-    n_encoder_layers: int = 6
-    n_decoder_layers: int = 2
-    n_heads: int = 8
-    dropout: float = 0.1
-    mask_ratio: float = 0.75
-    # SpatialBERT masking params
-    expr_mask_ratio: float = 0.1
-    pos_mask_ratio: float = 0.1
-    coord_noise_std: float = 10.0
+    n_genes: int = 500       # Number of genes per sample
+    d_model: int = 96        # Model dimension
+    n_layers: int = 3        # Number of transformer layers
+    n_heads: int = 3         # Number of attention heads
+    dropout: float = 0.1     # Dropout rate
+    
+    # Gene-level masking parameters
+    gene_mask_ratio: float = 0.15  # Mask 15% of valid genes per spot
+    noise_scale: float = 0.1       # Noise scale for masked genes (10% strategy)
+    
+    # Topology learning parameters
+    k_neighbors: int = 6            # Number of nearest neighbors for adjacency matrix
+    ema_decay: float = 0.99         # Initial EMA decay (will increase to 0.9995)
+    
+    # Token parameters
     max_value: int = 512
-    padding_idx: int = 0     # Padding token index
-    # BERT-style extras
-    spot_mask_ratio: float = 0.3           # ratio of spots to mask (for BERT path)
-    masking_mode: str = 'token'            # 'token' or 'noise'
-    noise_std: float = 0.0                 # gaussian noise std if masking_mode == 'noise'
-    n_gene_layers: int = 2                 # gene-level encoder layers to summarize per-spot
-    n_spot_layers: int = 4                 # spot-level transformer layers for context
-
+    padding_idx: int = 0
 
 @dataclass
 class DatasetConfig:
@@ -93,13 +87,7 @@ class TrainingConfig:
     patience: int = 10
     min_delta: float = 1e-4
     
-    # Loss
-    loss_type: str = 'mse'  # 'mse', 'mae', 'huber', 'dual_task'
-    huber_delta: float = 1.0
-    coord_loss_weight: float = 0.001  # weight for coordinate regression loss in MAE path
-    # BERT dual-task loss weights
-    expr_weight: float = 1.0
-    coord_weight: float = 0.1
+    # Loss (removed, using learnable gate in model)
     
 
 
