@@ -62,7 +62,6 @@ def load_or_build_global_hvgs(config: Config, tokenizer) -> list:
     hvgs_file.write_text('\n'.join(ordered))
     return ordered
 
-
 def evaluate_expression_reconstruction(model, gene_ids, gene_exp, coords, mask_ratio=0.15):
     """Evaluate expression reconstruction performance"""
     B, N, G = gene_exp.shape
@@ -85,9 +84,10 @@ def evaluate_expression_reconstruction(model, gene_ids, gene_exp, coords, mask_r
     # Simple zero masking for evaluation
     masked_values[gene_mask] = 0
     
-    # Forward pass with masked values
+    # Forward pass with masked values using updated BERT interface
+    # Call the underlying model directly to have control over use_predictor
     with torch.no_grad():
-        predictions = model(gene_ids, gene_exp, masked_values, coords, gene_mask)
+        predictions = model(gene_ids, gene_exp, masked_values, coords, gene_mask, use_predictor=True)
     
     # Get predictions for masked genes
     if 'expr_pred' in predictions and gene_mask.any():
@@ -123,14 +123,6 @@ def evaluate_expression_reconstruction(model, gene_ids, gene_exp, coords, mask_r
     
     return None
 
-
-# Note: BERT model doesn't predict coordinates, this function is kept for compatibility
-def evaluate_coordinate_prediction(model, gene_ids, gene_exp, coords, mask_ratio=0.15, noise_std=10.0):
-    """Evaluate coordinate prediction performance - not applicable for BERT model"""
-    # BERT model focuses on gene expression reconstruction, not coordinate prediction
-    return None
-
-
 def get_spot_embeddings(model, gene_ids, gene_exp, coords):
     """Get spot embeddings without any masking for clustering"""
     device = next(model.parameters()).device
@@ -141,8 +133,9 @@ def get_spot_embeddings(model, gene_ids, gene_exp, coords):
     coords = coords.to(device)
     
     # Forward pass without masking (use original values as both input and target)
+    # For embeddings, we don't need the predictor
     with torch.no_grad():
-        predictions = model(gene_ids, gene_exp, gene_exp, coords, None)
+        predictions = model(gene_ids, gene_exp, gene_exp, coords, None, use_predictor=False)
         # cls_tokens now has shape [B, N, D]
         spot_embeddings = predictions['cls_tokens']
     
@@ -151,7 +144,7 @@ def get_spot_embeddings(model, gene_ids, gene_exp, coords):
 
 def main():
     # Configuration
-    checkpoint_path = './checkpoints/last.ckpt'  # Update path for BERT checkpoint
+    checkpoint_path = './checkpoints/epoch=17-val_loss=0.7240.ckpt'  # Update path for BERT checkpoint
     data_dir = '/leonardo_work/EUHPC_B25_011/ST/DLPFC'
     
     # Load config for BERT
@@ -218,14 +211,12 @@ def main():
     gene_ids_t = torch.tensor(gene_ids).long()
     
     # Inputs are already aligned to the exact training gene order and size
-    
     batch_gene_ids = gene_ids_t.unsqueeze(0).expand(1, n_spots, -1)
     batch_gene_exp = gene_exp_t.unsqueeze(0)
-    
-    print("\n=== Evaluation Results ===")
-    
+       
     # 1. Expression Reconstruction Evaluation
     print("\n1. Expression Reconstruction:")
+    # Use the underlying BERT model directly for evaluation
     expr_metrics = evaluate_expression_reconstruction(
         model.model, batch_gene_ids, batch_gene_exp, coords_t, mask_ratio=0.15
     )
@@ -235,14 +226,10 @@ def main():
         print(f"   Avg Pearson Correlation: {expr_metrics['expr_pearson']:.4f}")
         print(f"   Masked genes: {expr_metrics['n_masked_genes']}")
         print(f"   Spots evaluated: {expr_metrics['n_spots_evaluated']}")
-    
-    # 2. Coordinate Prediction Evaluation (not applicable for BERT)
-    print("\n2. Coordinate Prediction:")
-    print("   Not applicable for BERT model (focuses on gene expression reconstruction)")
-    coord_metrics = None
-    
-    # 3. Get embeddings for clustering (without masking)
-    print("\n3. Clustering Evaluation:")
+        
+    # 2. Get embeddings for clustering (without masking)
+    print("\n2. Spatial Clustering Evaluation:")
+    # Use the underlying BERT model directly for embeddings
     features = get_spot_embeddings(model.model, batch_gene_ids, batch_gene_exp, coords_t)
     features = features.squeeze(0)  # Remove batch dimension
     

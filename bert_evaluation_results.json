@@ -1,8 +1,14 @@
 {
-  "expression_metrics": {},
+  "expression_metrics": {
+    "expr_mse": 0.2999275028705597,
+    "expr_mae": 0.4429461658000946,
+    "expr_pearson": NaN,
+    "n_masked_genes": 14478,
+    "n_spots_evaluated": 3384
+  },
   "clustering_metrics": {
-    "silhouette": 0.3573979437351227,
-    "ari": 0.10039801246986058,
-    "nmi": 0.1676971541063838
+    "silhouette": 0.18915484845638275,
+    "ari": 0.09978586018276513,
+    "nmi": 0.16407968360027214
   }
 }
