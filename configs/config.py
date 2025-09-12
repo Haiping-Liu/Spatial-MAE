@@ -25,7 +25,8 @@ class ModelConfig:
     
     # Topology learning parameters
     k_neighbors: int = 6            # Number of nearest neighbors for adjacency matrix
-    ema_decay: float = 0.99         # Initial EMA decay (will increase to 0.9995)
+    lambda_topo: float = 0.3        # Fixed weight for topology loss
+    ema_decay: float = 0.995        # Fixed EMA decay for teacher update
     
     # Token parameters
     max_value: int = 512

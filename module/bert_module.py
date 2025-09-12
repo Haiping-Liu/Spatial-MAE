@@ -23,8 +23,6 @@ class SpatialBERTLightning(pl.LightningModule):
             n_layers=config.model.n_layers,
             n_heads=config.model.n_heads,
             dropout=config.model.dropout,
-            gene_mask_ratio=getattr(config.model, 'gene_mask_ratio', 0.15),
-            noise_scale=getattr(config.model, 'noise_scale', 0.1),
         )
         
         # Initialize teacher model (EMA)
@@ -32,20 +30,22 @@ class SpatialBERTLightning(pl.LightningModule):
         for p in self.teacher.parameters():
             p.requires_grad = False
         
-        # Topology learning parameters
+        # Topology learning parameters (fixed weights)
         self.k_neighbors = getattr(config.model, 'k_neighbors', 6)
-        self.ema_decay = getattr(config.model, 'ema_decay', 0.99)
-        
-        # Learnable sigmoid gate for topology loss
-        self.topo_gate_logit = torch.nn.Parameter(torch.tensor(-4.0)) # Initialize with a small gate value
+        self.lambda_topo = getattr(config.model, 'lambda_topo', 0.3)
+        self.ema_decay = getattr(config.model, 'ema_decay', 0.995)
     
     def forward(
         self,
         gene_ids: torch.Tensor,
         gene_values: torch.Tensor,
         coords: torch.Tensor,
+        masked_values: torch.Tensor = None,
+        gene_mask: torch.Tensor = None,
     ) -> Dict[str, torch.Tensor]:
-        return self.model(gene_ids, gene_values, coords)
+        if masked_values is None:
+            masked_values = gene_values
+        return self.model(gene_ids, gene_values, masked_values, coords, gene_mask)
     
     def update_teacher(self):
         """Update teacher model with EMA"""
@@ -57,14 +57,18 @@ class SpatialBERTLightning(pl.LightningModule):
         """Training step with gene-level masking and topology learning"""
         gene_ids = batch['gene_ids']
         gene_values = batch['gene_values']
+        masked_values = batch['masked_values']
         coords = batch['coords']
+        gene_mask = batch['gene_mask']
         
-        # Student forward (with masking)
-        student_out = self.model(gene_ids, gene_values, coords, apply_mask=True)
+        # Student forward (with masked values)
+        student_out = self.model(gene_ids, gene_values, masked_values, coords, gene_mask)
         
-        # Teacher forward (no masking)
+        # Teacher forward (with original values)
+        # Note: Teacher uses projector but not predictor
         with torch.no_grad():
-            teacher_out = self.teacher(gene_ids, gene_values, coords, apply_mask=False)
+            self.teacher.eval()  # Ensure teacher is in eval mode for BatchNorm
+            teacher_out = self.teacher(gene_ids, gene_values, gene_values, coords, use_predictor=False)
         
         # Compute losses
         recon_losses = compute_bert_loss(student_out)
@@ -73,26 +77,21 @@ class SpatialBERTLightning(pl.LightningModule):
         # Build adjacency matrix dynamically
         adj_matrix = build_adjacency_matrix(coords, k=self.k_neighbors)
         
-        # Compute topology loss
+        # Compute topology loss using BYOL-style prediction
+        # Student predictor output tries to predict teacher projector output
         topo_loss = compute_topology_loss(
-            student_out['cls_tokens'],
-            teacher_out['cls_tokens'].detach(),
+            student_out['cls_predicted'],  # Student: backbone → projector → predictor
+            teacher_out['cls_projected'].detach(),  # Teacher: backbone → projector (stop grad)
             adj_matrix
         )
         
-        # Gated total loss with a learnable sigmoid gate
-        topo_gate = torch.sigmoid(self.topo_gate_logit)
-        total_loss = recon_loss + topo_gate * topo_loss
-        
-        # Update EMA decay (increase over time)
-        current_decay = min(self.ema_decay + 0.00005 * self.current_epoch, 0.9995)
-        self.ema_decay = current_decay
+        # Total loss with fixed topology weight
+        total_loss = recon_loss + self.lambda_topo * topo_loss
         
         # Logging
         self.log('train_loss', total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('topo_gate', topo_gate, on_step=True, on_epoch=False)
         self.log('ema_decay', self.ema_decay, on_step=False, on_epoch=True)
         
         return total_loss
@@ -101,14 +100,18 @@ class SpatialBERTLightning(pl.LightningModule):
         """Validation step with topology loss"""
         gene_ids = batch['gene_ids']
         gene_values = batch['gene_values']
+        masked_values = batch['masked_values']
         coords = batch['coords']
+        gene_mask = batch['gene_mask']
         
-        # Student forward (with masking even in val for consistency)
-        student_out = self.model(gene_ids, gene_values, coords, apply_mask=True)
+        # Student forward (with masked values)
+        student_out = self.model(gene_ids, gene_values, masked_values, coords, gene_mask)
         
-        # Teacher forward (no masking)
+        # Teacher forward (with original values)
+        # Note: Teacher uses projector but not predictor
         with torch.no_grad():
-            teacher_out = self.teacher(gene_ids, gene_values, coords, apply_mask=False)
+            self.teacher.eval()  # Ensure teacher is in eval mode for BatchNorm
+            teacher_out = self.teacher(gene_ids, gene_values, gene_values, coords, use_predictor=False)
         
         # Compute losses
         recon_losses = compute_bert_loss(student_out)
@@ -117,21 +120,28 @@ class SpatialBERTLightning(pl.LightningModule):
         # Build adjacency matrix
         adj_matrix = build_adjacency_matrix(coords, k=self.k_neighbors)
         
-        # Compute topology loss
+        # Compute topology loss using BYOL-style prediction (same as training)
         topo_loss = compute_topology_loss(
-            student_out['cls_tokens'],
-            teacher_out['cls_tokens'],
+            student_out['cls_predicted'],  # Student: backbone → projector → predictor
+            teacher_out['cls_projected'].detach(),  # Teacher: backbone → projector (stop grad)
             adj_matrix
         )
         
-        # Total loss (use full weight in validation)
-        topo_gate = torch.sigmoid(self.topo_gate_logit)
-        total_loss = recon_loss + topo_gate * topo_loss
+        # Optionally compute topology loss with original cls_tokens for comparison
+        topo_loss_cls = compute_topology_loss(
+            student_out['cls_tokens'],
+            teacher_out['cls_tokens'].detach(),
+            adj_matrix
+        )
+        
+        # Total loss (use same fixed weight in validation)
+        total_loss = recon_loss + self.lambda_topo * topo_loss
         
         # Logging
         self.log('val_loss', total_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_topo_loss_cls', topo_loss_cls, on_step=False, on_epoch=True)  # Optional metric for comparison
         
         return total_loss
     

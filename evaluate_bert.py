@@ -73,36 +73,53 @@ def evaluate_expression_reconstruction(model, gene_ids, gene_exp, coords, mask_r
     gene_exp = gene_exp.to(device)
     coords = coords.to(device)
     
-    # Forward pass with masking enabled (model will apply gene-level masking internally)
+    # Generate mask (similar to dataset)
+    gene_mask = torch.zeros_like(gene_exp, dtype=torch.bool)
+    masked_values = gene_exp.clone()
+    
+    # Apply masking
+    valid_mask = (gene_ids != 0) & (gene_exp > 0)
+    mask_prob = torch.rand_like(gene_exp)
+    gene_mask = (mask_prob < mask_ratio) & valid_mask
+    
+    # Simple zero masking for evaluation
+    masked_values[gene_mask] = 0
+    
+    # Forward pass with masked values
     with torch.no_grad():
-        predictions = model(gene_ids, gene_exp, coords, apply_mask=True)
+        predictions = model(gene_ids, gene_exp, masked_values, coords, gene_mask)
     
     # Get predictions for masked genes
-    if 'expr_pred' in predictions and 'gene_mask' in predictions and predictions['gene_mask'] is not None:
-        gene_mask = predictions['gene_mask']
-        if gene_mask.any():
-            expr_pred = predictions['expr_pred'][gene_mask].cpu().numpy()
-            expr_true = predictions['gene_values'][gene_mask].cpu().numpy()
-            
-            # Compute metrics
-            mse = mean_squared_error(expr_true.flatten(), expr_pred.flatten())
-            mae = mean_absolute_error(expr_true.flatten(), expr_pred.flatten())
-            
-            # Pearson correlation per gene
-            correlations = []
-            for pred_gene, true_gene in zip(expr_pred, expr_true):
-                if np.std(true_gene) > 0 and np.std(pred_gene) > 0:
-                    corr, _ = pearsonr(true_gene, pred_gene)
+    if 'expr_pred' in predictions and gene_mask.any():
+        expr_pred = predictions['expr_pred'][gene_mask].cpu().numpy()
+        expr_true = gene_exp[gene_mask].cpu().numpy()
+        
+        # Compute metrics
+        mse = mean_squared_error(expr_true.flatten(), expr_pred.flatten())
+        mae = mean_absolute_error(expr_true.flatten(), expr_pred.flatten())
+        
+        # Pearson correlation per spot
+        correlations = []
+        # Reshape to compute correlation per spot
+        n_spots = B * N
+        for spot_idx in range(n_spots):
+            spot_mask = gene_mask.view(n_spots, -1)[spot_idx]
+            if spot_mask.sum() > 1:  # Need at least 2 values for correlation
+                pred_spot = predictions['expr_pred'].view(n_spots, -1)[spot_idx][spot_mask].cpu().numpy()
+                true_spot = gene_exp.view(n_spots, -1)[spot_idx][spot_mask].cpu().numpy()
+                if np.std(true_spot) > 0 and np.std(pred_spot) > 0:
+                    corr, _ = pearsonr(true_spot, pred_spot)
                     correlations.append(corr)
-            
-            avg_correlation = np.mean(correlations) if correlations else 0
-            
-            return {
-                'expr_mse': mse,
-                'expr_mae': mae,
-                'expr_pearson': avg_correlation,
-                'n_masked_genes': len(expr_pred)
-            }
+        
+        avg_correlation = np.mean(correlations) if correlations else 0
+        
+        return {
+            'expr_mse': mse,
+            'expr_mae': mae,
+            'expr_pearson': avg_correlation,
+            'n_masked_genes': int(gene_mask.sum()),
+            'n_spots_evaluated': len(correlations)
+        }
     
     return None
 
@@ -123,10 +140,9 @@ def get_spot_embeddings(model, gene_ids, gene_exp, coords):
     gene_exp = gene_exp.to(device)
     coords = coords.to(device)
     
-    # Forward pass without masking
+    # Forward pass without masking (use original values as both input and target)
     with torch.no_grad():
-        # apply_mask=False to get clean embeddings without masking
-        predictions = model(gene_ids, gene_exp, coords, apply_mask=False)
+        predictions = model(gene_ids, gene_exp, gene_exp, coords, None)
         # cls_tokens now has shape [B, N, D]
         spot_embeddings = predictions['cls_tokens']
     
@@ -218,6 +234,7 @@ def main():
         print(f"   MAE: {expr_metrics['expr_mae']:.4f}")
         print(f"   Avg Pearson Correlation: {expr_metrics['expr_pearson']:.4f}")
         print(f"   Masked genes: {expr_metrics['n_masked_genes']}")
+        print(f"   Spots evaluated: {expr_metrics['n_spots_evaluated']}")
     
     # 2. Coordinate Prediction Evaluation (not applicable for BERT)
     print("\n2. Coordinate Prediction:")

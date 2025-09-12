@@ -78,15 +78,11 @@ class SpatialBERT(nn.Module):
         n_layers: int,
         n_heads: int,
         dropout: float,
-        gene_mask_ratio: float = 0.15,
-        noise_scale: float = 0.1,
     ):
         super().__init__()
         
         self.n_genes = n_genes
         self.d_model = d_model
-        self.gene_mask_ratio = gene_mask_ratio
-        self.noise_scale = noise_scale
         
         # Gene encoding components
         self.gene_encoder = GeneEncoder(vocab_size, d_model, padding_idx=0)
@@ -106,6 +102,22 @@ class SpatialBERT(nn.Module):
         
         self.ln_output = nn.LayerNorm(d_model)
         
+        # BYOL-style projector (for both student and teacher)
+        self.projector = nn.Sequential(
+            nn.Linear(d_model, d_model * 2),
+            nn.BatchNorm1d(d_model * 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_model * 2, 256)
+        )
+        
+        # BYOL-style predictor (only for student)
+        self.predictor = nn.Sequential(
+            nn.Linear(256, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Linear(512, 256)
+        )
+        
         # Gene reconstruction decoder (cell-conditioned masked value prediction)
         self.expr_decoder = MVCDecoder(
             d_model=d_model,
@@ -115,93 +127,27 @@ class SpatialBERT(nn.Module):
             explicit_zero_prob=False,
             use_batch_labels=False,
         )
-        
-    def generate_gene_mask(self, gene_values: torch.Tensor, gene_ids: torch.Tensor):
-        """Generate gene-level mask with 80/10/10 strategy"""
-        B, N, G = gene_values.shape
-        device = gene_values.device
-        
-        # Valid genes: non-padding and positive expression
-        valid_mask = (gene_ids != 0) & (gene_values > 0)
-        
-        # Random mask for valid genes
-        mask_prob = torch.rand_like(gene_values)
-        gene_mask = (mask_prob < self.gene_mask_ratio) & valid_mask
-        
-        # Split masked genes into 80/10/10
-        mask_indices = gene_mask.nonzero(as_tuple=True)
-        n_masked = len(mask_indices[0])
-        
-        # Shuffle and split
-        perm = torch.randperm(n_masked, device=device)
-        n_zero = int(0.8 * n_masked)
-        n_keep = int(0.1 * n_masked)
-        
-        # Create mask types: 0=unmask, 1=zero, 2=keep, 3=noise
-        mask_type = torch.zeros_like(gene_values, dtype=torch.int8)
-        mask_type[mask_indices] = 3  # Default to noise
-        
-        # Apply splits
-        zero_idx = perm[:n_zero]
-        keep_idx = perm[n_zero:n_zero + n_keep]
-        
-        mask_type[
-            mask_indices[0][zero_idx],
-            mask_indices[1][zero_idx],
-            mask_indices[2][zero_idx]
-        ] = 1
-        
-        mask_type[
-            mask_indices[0][keep_idx],
-            mask_indices[1][keep_idx],
-            mask_indices[2][keep_idx]
-        ] = 2
-        
-        return gene_mask, mask_type
-    
-    def apply_mask(self, gene_values: torch.Tensor, mask_type: torch.Tensor):
-        """Apply masking operations based on mask type"""
-        masked_values = gene_values.clone()
-        
-        # 80%: zero out
-        masked_values[mask_type == 1] = 0
-        
-        # 10%: keep original (no change)
-        
-        # 10%: add noise
-        noise_mask = (mask_type == 3)
-        if noise_mask.any():
-            noise = torch.randn_like(masked_values[noise_mask]) * self.noise_scale
-            masked_values[noise_mask] += noise
-        
-        return masked_values
     
     def forward(
         self,
         gene_ids: torch.Tensor,
         gene_values: torch.Tensor,
+        masked_values: torch.Tensor,
         coords: torch.Tensor,
-        apply_mask: bool = True,
+        gene_mask: torch.Tensor = None,
+        use_predictor: bool = True,  # Set to False for teacher model
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with gene-level masking
         
         Args:
             gene_ids: [B, N, G]
-            gene_values: [B, N, G]
+            gene_values: [B, N, G] - Original values for loss
+            masked_values: [B, N, G] - Values after 80/10/10 masking
             coords: [B, N, 2]
-            apply_mask: Whether to apply masking (False for teacher)
+            gene_mask: [B, N, G] - Boolean mask for genes to reconstruct
         """
         B, N, G = gene_values.shape
-        device = gene_values.device
-        
-        # Generate and apply gene-level mask during training
-        if self.training and apply_mask:
-            gene_mask, mask_type = self.generate_gene_mask(gene_values, gene_ids)
-            masked_values = self.apply_mask(gene_values, mask_type)
-        else:
-            masked_values = gene_values
-            gene_mask = None
         
         # Flatten batch and spatial dimensions for processing
         gene_ids_flat = gene_ids.view(B * N, G)
@@ -237,12 +183,29 @@ class SpatialBERT(nn.Module):
         out = self.expr_decoder(cls_features_flat, gene_embeds)  # pred: [B*N, G]
         expr_pred = out["pred"].view(B, N, G)
         
+        # Apply projector to cls tokens for topology learning
+        B, N, D = cls_features_3d.shape
+        cls_flat = cls_features_3d.view(B * N, D)  # [B*N, D]
+        cls_projected = self.projector(cls_flat)  # [B*N, 256]
+        cls_projected_3d = cls_projected.view(B, N, 256)  # [B, N, 256]
+        
+        # Apply predictor (only for student, will be skipped for teacher)
+        if use_predictor:
+            cls_predicted = self.predictor(cls_projected)  # [B*N, 256]
+            cls_predicted_3d = cls_predicted.view(B, N, 256)  # [B, N, 256]
+        else:
+            cls_predicted_3d = None  # Teacher doesn't use predictor
+        
         result = {
-            'cls_tokens': cls_features_3d,  # [B, N, D] for topology loss
+            'cls_tokens': cls_features_3d,  # [B, N, D] original features
+            'cls_projected': cls_projected_3d,  # [B, N, 256] after projector
             'expr_pred': expr_pred,
             'gene_mask': gene_mask,
             'gene_values': gene_values,  # Original values for loss
         }
+        
+        if cls_predicted_3d is not None:
+            result['cls_predicted'] = cls_predicted_3d  # [B, N, 256] after predictor (student only)
         
         return result
 
