@@ -8,9 +8,9 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, s
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr
 
-from module import SpatialBERTLightning
-from config import Config
-from mae_tokenizer import get_default_mae_tokenizer
+from module.bert_module import SpatialBERTLightning
+from configs.config import Config
+from data.tokenizer import get_default_mae_tokenizer
 
 
 def load_or_build_global_hvgs(config: Config, tokenizer) -> list:
@@ -68,85 +68,49 @@ def evaluate_expression_reconstruction(model, gene_ids, gene_exp, coords, mask_r
     B, N, G = gene_exp.shape
     device = next(model.parameters()).device
     
-    # Create random masks for evaluation
-    expr_mask = torch.rand(B, N) < mask_ratio
-    expr_mask = expr_mask.to(device)
-    
     # Move data to device
     gene_ids = gene_ids.to(device)
     gene_exp = gene_exp.to(device)
     coords = coords.to(device)
     
-    # Forward pass with masking
+    # Forward pass with masking enabled (model will apply gene-level masking internally)
     with torch.no_grad():
-        predictions = model(gene_ids, gene_exp, coords, expr_mask=expr_mask)
+        predictions = model(gene_ids, gene_exp, coords, apply_mask=True)
     
-    # Get predictions for masked spots
-    if 'expr_pred' in predictions and predictions['expr_mask'].any():
-        expr_pred = predictions['expr_pred'].cpu().numpy()
-        expr_true = gene_exp[predictions['expr_mask']].cpu().numpy()
-        
-        # Compute metrics
-        mse = mean_squared_error(expr_true.flatten(), expr_pred.flatten())
-        mae = mean_absolute_error(expr_true.flatten(), expr_pred.flatten())
-        
-        # Pearson correlation per spot
-        correlations = []
-        for pred_spot, true_spot in zip(expr_pred, expr_true):
-            if np.std(true_spot) > 0 and np.std(pred_spot) > 0:
-                corr, _ = pearsonr(true_spot, pred_spot)
-                correlations.append(corr)
-        
-        avg_correlation = np.mean(correlations) if correlations else 0
-        
-        return {
-            'expr_mse': mse,
-            'expr_mae': mae,
-            'expr_pearson': avg_correlation,
-            'n_masked_spots': len(expr_pred)
-        }
+    # Get predictions for masked genes
+    if 'expr_pred' in predictions and 'gene_mask' in predictions and predictions['gene_mask'] is not None:
+        gene_mask = predictions['gene_mask']
+        if gene_mask.any():
+            expr_pred = predictions['expr_pred'][gene_mask].cpu().numpy()
+            expr_true = predictions['gene_values'][gene_mask].cpu().numpy()
+            
+            # Compute metrics
+            mse = mean_squared_error(expr_true.flatten(), expr_pred.flatten())
+            mae = mean_absolute_error(expr_true.flatten(), expr_pred.flatten())
+            
+            # Pearson correlation per gene
+            correlations = []
+            for pred_gene, true_gene in zip(expr_pred, expr_true):
+                if np.std(true_gene) > 0 and np.std(pred_gene) > 0:
+                    corr, _ = pearsonr(true_gene, pred_gene)
+                    correlations.append(corr)
+            
+            avg_correlation = np.mean(correlations) if correlations else 0
+            
+            return {
+                'expr_mse': mse,
+                'expr_mae': mae,
+                'expr_pearson': avg_correlation,
+                'n_masked_genes': len(expr_pred)
+            }
     
     return None
 
 
+# Note: BERT model doesn't predict coordinates, this function is kept for compatibility
 def evaluate_coordinate_prediction(model, gene_ids, gene_exp, coords, mask_ratio=0.15, noise_std=10.0):
-    """Evaluate coordinate prediction performance"""
-    B, N, _ = coords.shape
-    device = next(model.parameters()).device
-    
-    # Create position masks
-    pos_mask = torch.rand(B, N) < mask_ratio
-    pos_mask = pos_mask.to(device)
-    
-    # Move data to device
-    gene_ids = gene_ids.to(device)
-    gene_exp = gene_exp.to(device)
-    coords = coords.to(device)
-    
-    # Forward pass with coordinate masking
-    with torch.no_grad():
-        predictions = model(gene_ids, gene_exp, coords, pos_mask=pos_mask)
-    
-    # Get predictions for masked coordinates
-    if 'coord_pred' in predictions and 'original_coords' in predictions:
-        coord_pred = predictions['coord_pred'].cpu().numpy()
-        coord_true = predictions['original_coords'].cpu().numpy()
-        
-        # Compute metrics
-        mse = mean_squared_error(coord_true, coord_pred)
-        mae = mean_absolute_error(coord_true, coord_pred)
-        
-        # Euclidean distance
-        distances = np.sqrt(np.sum((coord_pred - coord_true)**2, axis=1))
-        avg_distance = np.mean(distances)
-        
-        return {
-            'coord_mse': mse,
-            'coord_mae': mae,
-            'coord_avg_distance': avg_distance,
-            'n_masked_coords': len(coord_pred)
-        }
-    
+    """Evaluate coordinate prediction performance - not applicable for BERT model"""
+    # BERT model focuses on gene expression reconstruction, not coordinate prediction
     return None
 
 
@@ -161,16 +125,17 @@ def get_spot_embeddings(model, gene_ids, gene_exp, coords):
     
     # Forward pass without masking
     with torch.no_grad():
-        # No masks provided - model will use zeros (no masking)
-        predictions = model(gene_ids, gene_exp, coords)
-        spot_embeddings = predictions['spot_embeddings']
+        # apply_mask=False to get clean embeddings without masking
+        predictions = model(gene_ids, gene_exp, coords, apply_mask=False)
+        # cls_tokens now has shape [B, N, D]
+        spot_embeddings = predictions['cls_tokens']
     
     return spot_embeddings.cpu().numpy()
 
 
 def main():
     # Configuration
-    checkpoint_path = './checkpoints/epoch=21-train_loss=0.0751.ckpt'  # Update path for BERT checkpoint
+    checkpoint_path = './checkpoints/last.ckpt'  # Update path for BERT checkpoint
     data_dir = '/leonardo_work/EUHPC_B25_011/ST/DLPFC'
     
     # Load config for BERT
@@ -186,9 +151,8 @@ def main():
     )
     model.eval()
     
-    # Check if using BERT architecture
-    if config.model.arch != 'bert':
-        print(f"Warning: Model architecture is {config.model.arch}, expected 'bert'")
+    # Using BERT architecture
+    print("Using Spatial BERT architecture")
     
     # Load test slide
     h5ad_file = sorted(Path(data_dir).glob('*.h5ad'))[0]
@@ -253,19 +217,12 @@ def main():
         print(f"   MSE: {expr_metrics['expr_mse']:.4f}")
         print(f"   MAE: {expr_metrics['expr_mae']:.4f}")
         print(f"   Avg Pearson Correlation: {expr_metrics['expr_pearson']:.4f}")
-        print(f"   Masked spots: {expr_metrics['n_masked_spots']}")
+        print(f"   Masked genes: {expr_metrics['n_masked_genes']}")
     
-    # 2. Coordinate Prediction Evaluation
+    # 2. Coordinate Prediction Evaluation (not applicable for BERT)
     print("\n2. Coordinate Prediction:")
-    coord_metrics = evaluate_coordinate_prediction(
-        model.model, batch_gene_ids, batch_gene_exp, coords_t, 
-        mask_ratio=0.15, noise_std=config.model.coord_noise_std
-    )
-    if coord_metrics:
-        print(f"   MSE: {coord_metrics['coord_mse']:.4f}")
-        print(f"   MAE: {coord_metrics['coord_mae']:.4f}")
-        print(f"   Avg Euclidean Distance: {coord_metrics['coord_avg_distance']:.4f}")
-        print(f"   Masked coordinates: {coord_metrics['n_masked_coords']}")
+    print("   Not applicable for BERT model (focuses on gene expression reconstruction)")
+    coord_metrics = None
     
     # 3. Get embeddings for clustering (without masking)
     print("\n3. Clustering Evaluation:")
@@ -329,8 +286,7 @@ def main():
     
     # Save results
     results = {
-        'expression_metrics': expr_metrics,
-        'coordinate_metrics': coord_metrics,
+        'expression_metrics': expr_metrics if expr_metrics else {},
         'clustering_metrics': {
             'silhouette': float(silhouette),
             'ari': float(ari),

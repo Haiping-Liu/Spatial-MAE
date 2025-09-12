@@ -37,36 +37,32 @@ class SpatialBERTLayer(nn.Module):
         gene_tokens: torch.Tensor,  # [B*N, G, D]
         cls_tokens: torch.Tensor,   # [B*N, 1, D]
         gene_padding_mask: torch.Tensor,  # [B*N, G] - True for padding
-        spot_embeddings: torch.Tensor,  # [B, N, D] - full tensor
         pos_encoding: torch.Tensor,  # [B, N, D]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        batch_size: int,
+        n_spots: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Process one layer: Gene attention → Cell attention
         
         Returns:
             gene_tokens: Updated gene tokens for next layer
             cls_tokens: Updated CLS tokens for next layer  
-            spot_embeddings: Updated spot embeddings
         """
         # Gene attention
         gene_tokens, cls_features = self.gene_layer(gene_tokens, cls_tokens, gene_padding_mask)
         
-        # Reshape cls_features to match spot_embeddings
-        B, N, D = spot_embeddings.shape
-        cls_features_reshaped = cls_features.view(B, N, D)
+        # Reshape for cell attention
+        cls_3d = cls_features.view(batch_size, n_spots, -1)  # [B, N, D]
         
-        # Update spot embeddings with new CLS features
-        spot_embeddings = cls_features_reshaped
-
         # Cell attention for all spots
-        spot_embeddings = self.cell_layer(spot_embeddings, pos_encoding)
+        cls_3d = self.cell_layer(cls_3d, pos_encoding)
 
-        # Flatten back for FiLM modulation
-        updated_cls = spot_embeddings.view(B * N, D)
-        gene_tokens = self.film_layer(gene_tokens, updated_cls)
-        cls_tokens = updated_cls.unsqueeze(1)
+        # Flatten back for gene processing
+        cls_features = cls_3d.view(batch_size * n_spots, -1)  # [B*N, D]
+        gene_tokens = self.film_layer(gene_tokens, cls_features)
+        cls_tokens = cls_features.unsqueeze(1)  # [B*N, 1, D]
         
-        return gene_tokens, cls_tokens, spot_embeddings
+        return gene_tokens, cls_tokens
 
 
 class SpatialBERT(nn.Module):
@@ -225,25 +221,24 @@ class SpatialBERT(nn.Module):
         # Get positional encoding
         pos_encoding = self.pos_encoder(coords)
         
-        # Initialize spot embeddings from CLS tokens
-        spot_embeddings = cls_tokens.squeeze(1).view(B, N, self.d_model)
-        
-        # Process through stacked layers (all spots participate)
+        # Process through stacked layers
         for layer in self.layers:
-            gene_tokens, cls_tokens, spot_embeddings = layer(
-                gene_tokens, cls_tokens, gene_padding_mask, spot_embeddings, pos_encoding
+            gene_tokens, cls_tokens = layer(
+                gene_tokens, cls_tokens, gene_padding_mask, pos_encoding, B, N
             )
         
-        spot_embeddings = self.ln_output(spot_embeddings)
+        # Apply layer norm to cls tokens
+        cls_features = cls_tokens.squeeze(1)  # [B*N, D]
+        cls_features_3d = cls_features.view(B, N, self.d_model)  # [B, N, D]
+        cls_features_3d = self.ln_output(cls_features_3d)
         
         # Reconstruction using MVCDecoder conditioned on CLS tokens
-        cls_features = cls_tokens.squeeze(1)              # [B*N, D]
-        out = self.expr_decoder(cls_features, gene_embeds)  # pred: [B*N, G]
+        cls_features_flat = cls_features_3d.view(B * N, self.d_model)  # [B*N, D]
+        out = self.expr_decoder(cls_features_flat, gene_embeds)  # pred: [B*N, G]
         expr_pred = out["pred"].view(B, N, G)
         
         result = {
-            'spot_embeddings': spot_embeddings,
-            'cls_tokens': cls_features,  # [B, N, D] for topology loss
+            'cls_tokens': cls_features_3d,  # [B, N, D] for topology loss
             'expr_pred': expr_pred,
             'gene_mask': gene_mask,
             'gene_values': gene_values,  # Original values for loss

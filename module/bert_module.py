@@ -90,8 +90,8 @@ class SpatialBERTLightning(pl.LightningModule):
         
         # Logging
         self.log('train_loss', total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, sync_dist=True)
-        self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('topo_gate', topo_gate, on_step=True, on_epoch=False)
         self.log('ema_decay', self.ema_decay, on_step=False, on_epoch=True)
         
@@ -130,8 +130,8 @@ class SpatialBERTLightning(pl.LightningModule):
         
         # Logging
         self.log('val_loss', total_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True)
-        self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True)
+        self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True)
         
         return total_loss
     

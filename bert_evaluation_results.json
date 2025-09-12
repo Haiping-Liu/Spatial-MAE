@@ -1,0 +1,8 @@
+{
+  "expression_metrics": {},
+  "clustering_metrics": {
+    "silhouette": 0.3573979437351227,
+    "ari": 0.10039801246986058,
+    "nmi": 0.1676971541063838
+  }
+}
