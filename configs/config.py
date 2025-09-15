@@ -10,8 +10,8 @@ from omegaconf import OmegaConf, DictConfig
 
 @dataclass
 class ModelConfig:
-    """Model architecture configuration for Spatial BERT"""
-    arch: str = 'bert'       # Model architecture type
+    """Model architecture configuration for HiGeST"""
+    arch: str = 'higest'     # Model architecture type
     vocab_size: int = 60000  # Vocabulary size for gene embeddings
     n_genes: int = 500       # Number of genes per sample
     d_model: int = 96        # Model dimension
@@ -95,7 +95,7 @@ class TrainingConfig:
 @dataclass
 class LoggingConfig:
     """Logging configuration"""
-    project_name: str = 'spatial-mae'
+    project_name: str = 'HiGeST'
     run_name: Optional[str] = None
     logger: str = 'wandb'  # 'wandb' or 'tensorboard'
     log_dir: str = './logs'

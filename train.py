@@ -1,5 +1,5 @@
 """
-Main training script for Spatial MAE
+Main training script for HiGeST
 """
 import argparse
 from pathlib import Path
@@ -10,8 +10,7 @@ from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
 from configs.config import Config
-from module.mae_module import SpatialMAELightning
-from module.bert_module import SpatialBERTLightning
+from module.higest_module import HiGeSTLightning
 from data.dataset import MAESTDataset, DatasetPath, mae_collate_fn
 from data.tokenizer import get_default_mae_tokenizer
 
@@ -108,10 +107,7 @@ class MAETrainer:
         )
     
     def setup_model(self):
-        if getattr(self.config.model, 'arch', 'mae') == 'bert':
-            self.model = SpatialBERTLightning(self.config)
-        else:
-            self.model = SpatialMAELightning(self.config)
+        self.model = HiGeSTLightning(self.config)
     
     def setup_callbacks(self):
         callbacks = [
@@ -176,8 +172,8 @@ class MAETrainer:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Spatial MAE")
-    parser.add_argument('--config', type=str, default='configs/bert_config.yaml', help='Path to config file')
+    parser = argparse.ArgumentParser(description="Train HiGeST model")
+    parser.add_argument('--config', type=str, default='configs/higest_config.yaml', help='Path to config file')
     args = parser.parse_args()
     
     trainer = MAETrainer(args.config)

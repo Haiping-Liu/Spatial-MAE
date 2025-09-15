@@ -8,7 +8,7 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, s
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr
 
-from module.bert_module import SpatialBERTLightning
+from module.higest_module import HiGeSTLightning
 from configs.config import Config
 from data.tokenizer import get_default_mae_tokenizer
 
@@ -155,7 +155,7 @@ def main():
     
     # Load model
     print("Loading BERT model...")
-    model = SpatialBERTLightning.load_from_checkpoint(
+    model = HiGeSTLightning.load_from_checkpoint(
         checkpoint_path, config=config, strict=False, map_location='cpu'
     )
     model.eval()

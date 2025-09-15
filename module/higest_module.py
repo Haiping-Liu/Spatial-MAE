@@ -5,18 +5,18 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from typing import Dict
 import copy
 
-from model.spatial_bert import SpatialBERT, compute_bert_loss, build_adjacency_matrix, compute_topology_loss
+from model.higest import HiGeST, compute_bert_loss, build_adjacency_matrix, compute_topology_loss
 from configs.config import Config
 
 
-class SpatialBERTLightning(pl.LightningModule):    
+class HiGeSTLightning(pl.LightningModule):    
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
         self.save_hyperparameters()
-        
+
         # Initialize student model
-        self.model = SpatialBERT(
+        self.model = HiGeST(
             vocab_size=config.model.vocab_size,
             n_genes=config.model.n_genes,
             d_model=config.model.d_model,

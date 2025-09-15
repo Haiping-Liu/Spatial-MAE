@@ -14,10 +14,10 @@ from model.layers import (
 )
 
 
-class SpatialBERTLayer(nn.Module):
+class HiGeSTLayer(nn.Module):
     """
-    Single layer of Spatial BERT: Gene attention (visible only) → Cell attention (all)
-    Similar to SpatialEncoderLayer but with masking
+    Single layer of HiGeST: Gene attention (visible only) → Cell attention (all)
+    Hierarchical Gene expression in Spatial Transcriptomics
     """
     def __init__(
         self,
@@ -65,9 +65,10 @@ class SpatialBERTLayer(nn.Module):
         return gene_tokens, cls_tokens
 
 
-class SpatialBERT(nn.Module):
+class HiGeST(nn.Module):
     """
-    Spatial BERT with gene-level masking (80/10/10 strategy)
+    HiGeST: Hierarchical Gene expression in Spatial Transcriptomics
+    with gene-level masking (80/10/10 strategy)
     """
     
     def __init__(
@@ -96,7 +97,7 @@ class SpatialBERT(nn.Module):
         
         # Stack of layers
         self.layers = nn.ModuleList([
-            SpatialBERTLayer(d_model, n_heads, dropout)
+            HiGeSTLayer(d_model, n_heads, dropout)
             for _ in range(n_layers)
         ])
         
