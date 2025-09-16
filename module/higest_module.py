@@ -1,11 +1,13 @@
 import torch
 import pytorch_lightning as pl
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
+import math
 from typing import Dict
 import copy
 
-from model.higest import HiGeST, compute_bert_loss, build_adjacency_matrix, compute_topology_loss
+from model.higest import HiGeST, build_adjacency_matrix
+from model.loss import mask_loss, topology_loss
 from configs.config import Config
 
 
@@ -67,19 +69,24 @@ class HiGeSTLightning(pl.LightningModule):
         # Teacher forward (with original values)
         # Note: Teacher uses projector but not predictor
         with torch.no_grad():
-            self.teacher.eval()  # Ensure teacher is in eval mode for BatchNorm
+            # Use batch statistics for BatchNorm while keeping Dropout disabled
+            self.teacher.eval()
+            for m in self.teacher.modules():
+                if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+                    m.train()
+                elif isinstance(m, torch.nn.Dropout):
+                    m.eval()
             teacher_out = self.teacher(gene_ids, gene_values, gene_values, coords, use_predictor=False)
         
         # Compute losses
-        recon_losses = compute_bert_loss(student_out)
+        recon_losses = mask_loss(student_out)
         recon_loss = recon_losses['loss']
         
         # Build adjacency matrix dynamically
         adj_matrix = build_adjacency_matrix(coords, k=self.k_neighbors)
         
         # Compute topology loss using BYOL-style prediction
-        # Student predictor output tries to predict teacher projector output
-        topo_loss = compute_topology_loss(
+        topo_loss = topology_loss(
             student_out['cls_predicted'],  # Student: backbone → projector → predictor
             teacher_out['cls_projected'].detach(),  # Teacher: backbone → projector (stop grad)
             adj_matrix
@@ -89,9 +96,9 @@ class HiGeSTLightning(pl.LightningModule):
         total_loss = recon_loss + self.lambda_topo * topo_loss
         
         # Logging
-        self.log('train_loss', total_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train_recon_loss', recon_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train_loss', total_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('ema_decay', self.ema_decay, on_step=False, on_epoch=True)
         
         return total_loss
@@ -110,38 +117,35 @@ class HiGeSTLightning(pl.LightningModule):
         # Teacher forward (with original values)
         # Note: Teacher uses projector but not predictor
         with torch.no_grad():
-            self.teacher.eval()  # Ensure teacher is in eval mode for BatchNorm
+            # Use batch statistics for BatchNorm while keeping Dropout disabled
+            self.teacher.eval()
+            for m in self.teacher.modules():
+                if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+                    m.train()
+                elif isinstance(m, torch.nn.Dropout):
+                    m.eval()
             teacher_out = self.teacher(gene_ids, gene_values, gene_values, coords, use_predictor=False)
         
         # Compute losses
-        recon_losses = compute_bert_loss(student_out)
+        recon_losses = mask_loss(student_out)
         recon_loss = recon_losses['loss']
         
         # Build adjacency matrix
         adj_matrix = build_adjacency_matrix(coords, k=self.k_neighbors)
         
         # Compute topology loss using BYOL-style prediction (same as training)
-        topo_loss = compute_topology_loss(
+        topo_loss = topology_loss(
             student_out['cls_predicted'],  # Student: backbone → projector → predictor
             teacher_out['cls_projected'].detach(),  # Teacher: backbone → projector (stop grad)
             adj_matrix
         )
-        
-        # Optionally compute topology loss with original cls_tokens for comparison
-        topo_loss_cls = compute_topology_loss(
-            student_out['cls_tokens'],
-            teacher_out['cls_tokens'].detach(),
-            adj_matrix
-        )
-        
-        # Total loss (use same fixed weight in validation)
+
         total_loss = recon_loss + self.lambda_topo * topo_loss
         
         # Logging
         self.log('val_loss', total_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_topo_loss_cls', topo_loss_cls, on_step=False, on_epoch=True)  # Optional metric for comparison
         
         return total_loss
     
@@ -150,7 +154,7 @@ class HiGeSTLightning(pl.LightningModule):
         self.update_teacher()
     
     def configure_optimizers(self):
-        """Configure optimizers and schedulers"""
+        """Configure optimizers and schedulers with warmup + cosine annealing"""
         optimizer = AdamW(
             self.parameters(),
             lr=self.config.training.learning_rate,
@@ -158,13 +162,30 @@ class HiGeSTLightning(pl.LightningModule):
             eps=self.config.training.adam_eps,
             weight_decay=self.config.training.weight_decay
         )
-    
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.config.training.t_max,
-            eta_min=self.config.training.min_lr
-        )
-        
+
+        # Get total training steps from trainer
+        total_steps = self.trainer.estimated_stepping_batches
+        steps_per_epoch = total_steps // self.config.training.max_epochs
+
+        # Get warmup epochs and convert to steps (default 10 epochs warmup)
+        warmup_epochs = getattr(self.config.training, 'warmup_epochs', 10)
+        warmup_steps = warmup_epochs * steps_per_epoch
+        min_lr_ratio = self.config.training.min_lr / self.config.training.learning_rate
+
+        print(f"LR Schedule: warmup {warmup_epochs} epochs ({warmup_steps} steps), total {self.config.training.max_epochs} epochs ({total_steps} steps)")
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                # Linear warmup
+                return float(step) / float(max(1, warmup_steps))
+            else:
+                # Cosine annealing after warmup
+                progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+                cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return min_lr_ratio + (1 - min_lr_ratio) * cosine_decay
+
+        scheduler = LambdaLR(optimizer, lr_lambda)
+
         return {
             'optimizer': optimizer,
             'lr_scheduler': {

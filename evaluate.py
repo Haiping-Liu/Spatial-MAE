@@ -19,7 +19,6 @@ def load_or_build_global_hvgs(config: Config, tokenizer) -> list:
 
     if hvgs_file.exists():
         ordered = [line.strip() for line in hvgs_file.read_text().splitlines() if line.strip()]
-        # If length matches, return directly; if longer, truncate; if shorter, rebuild to avoid shape mismatch
         if len(ordered) == config.model.n_genes:
             return ordered
         if len(ordered) > config.model.n_genes:
@@ -84,7 +83,7 @@ def evaluate_expression_reconstruction(model, gene_ids, gene_exp, coords, mask_r
     # Simple zero masking for evaluation
     masked_values[gene_mask] = 0
     
-    # Forward pass with masked values using updated BERT interface
+    # Forward pass with masked values using updated higest interface
     # Call the underlying model directly to have control over use_predictor
     with torch.no_grad():
         predictions = model(gene_ids, gene_exp, masked_values, coords, gene_mask, use_predictor=True)
@@ -144,27 +143,27 @@ def get_spot_embeddings(model, gene_ids, gene_exp, coords):
 
 def main():
     # Configuration
-    checkpoint_path = './checkpoints/epoch=17-val_loss=0.7240.ckpt'  # Update path for BERT checkpoint
+    checkpoint_path = './checkpoints/higest_20250916_121010/last.ckpt'  
     data_dir = '/leonardo_work/EUHPC_B25_011/ST/DLPFC'
     
-    # Load config for BERT
-    config = Config.from_yaml('configs/bert_config.yaml')
+    # Load config for higest
+    config = Config.from_yaml('configs/higest_config.yaml')
     tokenizer = get_default_mae_tokenizer()
     config.model.vocab_size = len(tokenizer)
     config.model.padding_idx = tokenizer.pad_token_id
     
     # Load model
-    print("Loading BERT model...")
+    print("Loading HiGeST model...")
     model = HiGeSTLightning.load_from_checkpoint(
         checkpoint_path, config=config, strict=False, map_location='cpu'
     )
     model.eval()
     
-    # Using BERT architecture
-    print("Using Spatial BERT architecture")
+    # Using hi ge s t architecture
+    print("Using HiGeST architecture")
     
     # Load test slide
-    h5ad_file = sorted(Path(data_dir).glob('*.h5ad'))[0]
+    h5ad_file = sorted(Path(data_dir).glob('*.h5ad'))[1]
     print(f"Loading data from {h5ad_file}")
     adata = sc.read_h5ad(h5ad_file)
     
@@ -216,7 +215,7 @@ def main():
        
     # 1. Expression Reconstruction Evaluation
     print("\n1. Expression Reconstruction:")
-    # Use the underlying BERT model directly for evaluation
+    # Use the underlying higest model directly for evaluation
     expr_metrics = evaluate_expression_reconstruction(
         model.model, batch_gene_ids, batch_gene_exp, coords_t, mask_ratio=0.15
     )
@@ -229,17 +228,17 @@ def main():
         
     # 2. Get embeddings for clustering (without masking)
     print("\n2. Spatial Clustering Evaluation:")
-    # Use the underlying BERT model directly for embeddings
+    # Use the underlying higest model directly for embeddings
     features = get_spot_embeddings(model.model, batch_gene_ids, batch_gene_exp, coords_t)
     features = features.squeeze(0)  # Remove batch dimension
     
     # Store features in adata
-    adata.obsm['X_bert'] = features
+    adata.obsm['X_higest'] = features
     
     # Clustering with scanpy
-    sc.pp.neighbors(adata, use_rep='X_bert', n_neighbors=15)
+    sc.pp.neighbors(adata, use_rep='X_higest', n_neighbors=15)
     sc.tl.umap(adata)
-    sc.tl.leiden(adata, resolution=0.3, flavor='igraph', n_iterations=2, directed=False)
+    sc.tl.leiden(adata, resolution=0.4, flavor='igraph', n_iterations=2, directed=False)
     
     # Clustering metrics
     predictions = adata.obs['leiden'].astype(int).values
@@ -263,7 +262,7 @@ def main():
     
     # Spatial plots
     sc.pl.embedding(adata, basis='spatial', color='leiden', 
-                    ax=axes[0,0], show=False, title='BERT Clustering', frameon=False)
+                    ax=axes[0,0], show=False, title='higest Clustering', frameon=False)
     sc.pl.embedding(adata, basis='spatial', color='ground_truth',
                     ax=axes[0,1], show=False, title='Ground Truth', frameon=False)
     
@@ -275,7 +274,7 @@ def main():
     axes[2,0].hist(features.flatten(), bins=50, alpha=0.7, color='blue')
     axes[2,0].set_xlabel('Feature values')
     axes[2,0].set_ylabel('Frequency')
-    axes[2,0].set_title('BERT Feature Distribution')
+    axes[2,0].set_title('higest Feature Distribution')
     
     # Cluster sizes
     cluster_sizes = pd.Series(predictions).value_counts().sort_index()
@@ -285,8 +284,8 @@ def main():
     axes[2,1].set_title('Cluster Size Distribution')
     
     plt.tight_layout()
-    plt.savefig('bert_evaluation.png', dpi=150, bbox_inches='tight')
-    print(f"   Saved visualization to bert_evaluation.png")
+    plt.savefig('higest_evaluation.png', dpi=150, bbox_inches='tight')
+    print(f"   Saved visualization to higest_evaluation.png")
     
     # Save results
     results = {
@@ -299,9 +298,9 @@ def main():
     }
     
     import json
-    with open('bert_evaluation_results.json', 'w') as f:
+    with open('higest_evaluation_results.json', 'w') as f:
         json.dump(results, f, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else int(x) if isinstance(x, np.integer) else x)
-    print(f"   Saved metrics to bert_evaluation_results.json")
+    print(f"   Saved metrics to higest_evaluation_results.json")
 
 
 if __name__ == "__main__":

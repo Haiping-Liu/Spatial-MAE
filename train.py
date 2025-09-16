@@ -3,10 +3,11 @@ Main training script for HiGeST
 """
 import argparse
 from pathlib import Path
+from datetime import datetime
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from configs.config import Config
@@ -18,6 +19,16 @@ from data.tokenizer import get_default_mae_tokenizer
 class MAETrainer:    
     def __init__(self, config_path: str = None):
         self.config = Config.from_yaml(config_path) if config_path else Config()
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_name = f"{self.config.model.arch}_{timestamp}"
+        self.checkpoint_dir = Path(self.config.logging.save_dir) / self.run_name
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        config_save_path = self.checkpoint_dir / "config.yaml"
+        self.config.to_yaml(str(config_save_path))
+        print(f"Config saved to: {config_save_path}")
+        
         self.setup_seed()
         self.setup_datasets()
         self.setup_model()
@@ -112,29 +123,21 @@ class MAETrainer:
     def setup_callbacks(self):
         callbacks = [
             ModelCheckpoint(
-                dirpath=Path(self.config.logging.save_dir),
-                filename='{epoch:02d}-{' + self.config.logging.monitor_metric + ':.4f}',
+                dirpath=self.checkpoint_dir,
+                filename='epoch{epoch:02d}-{' + self.config.logging.monitor_metric + ':.4f}',
                 monitor=self.config.logging.monitor_metric,
                 mode=self.config.logging.monitor_mode,
                 save_top_k=self.config.logging.save_top_k,
                 save_last=True
-            ),
-            EarlyStopping(
-                monitor=self.config.logging.monitor_metric,
-                mode=self.config.logging.monitor_mode,
-                patience=self.config.training.patience,
-                min_delta=self.config.training.min_delta
-            ),
-            LearningRateMonitor(logging_interval='step')
+            )
         ]
         return callbacks
     
-    def setup_logger(self):     
-        logger = WandbLogger(
-            project=self.config.logging.project_name,
+    def setup_logger(self):
+        logger = TensorBoardLogger(
             save_dir=self.config.logging.log_dir,
-            name=self.config.logging.run_name,
-            offline=True
+            name=self.run_name,
+            version="",  # Don't create version_0 subfolder
         )
         return logger
     
@@ -166,9 +169,12 @@ class MAETrainer:
         )
     
     def run(self):
-        print("Starting training...")
+        print(f"Starting training...")
+        print(f"Checkpoints will be saved to: {self.checkpoint_dir}")
+        print(f"Logs will be saved to: {self.config.logging.log_dir}/{self.run_name}")
         self.fit()
-        print("Training completed!")
+        print(f"Training completed!")
+        print(f"Best checkpoint saved in: {self.checkpoint_dir}")
 
 
 def main():

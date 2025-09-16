@@ -67,6 +67,7 @@ class TrainingConfig:
     """Training configuration"""
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
+    warmup_epochs: int = 10
     warmup_steps: int = 1000
     max_epochs: int = 100
     gradient_clip_val: float = 1.0
