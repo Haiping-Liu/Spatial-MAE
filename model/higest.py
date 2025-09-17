@@ -248,4 +248,3 @@ def build_adjacency_matrix(coords: torch.Tensor, k: int = 6) -> torch.Tensor:
     return adj_matrix
 
 
-# Loss functions moved to model/loss.py

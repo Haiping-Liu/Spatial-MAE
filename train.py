@@ -6,17 +6,17 @@ from pathlib import Path
 from datetime import datetime
 import torch
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from configs.config import Config
 from module.higest_module import HiGeSTLightning
-from data.dataset import MAESTDataset, DatasetPath, mae_collate_fn
+from data.dataset import MAESTDataset, DatasetPath, collate_fn
 from data.tokenizer import get_default_mae_tokenizer
 
 
-class MAETrainer:    
+class Trainer:    
     def __init__(self, config_path: str = None):
         self.config = Config.from_yaml(config_path) if config_path else Config()
 
@@ -106,7 +106,7 @@ class MAETrainer:
             shuffle=True,
             num_workers=self.config.dataset.num_workers,
             drop_last=True,
-            collate_fn=mae_collate_fn
+            collate_fn=collate_fn
         )
         
         self.val_loader = DataLoader(
@@ -114,7 +114,7 @@ class MAETrainer:
             batch_size=self.config.dataset.batch_size,
             shuffle=False,
             num_workers=self.config.dataset.num_workers,
-            collate_fn=mae_collate_fn
+            collate_fn=collate_fn
         )
     
     def setup_model(self):
@@ -182,7 +182,7 @@ def main():
     parser.add_argument('--config', type=str, default='configs/higest_config.yaml', help='Path to config file')
     args = parser.parse_args()
     
-    trainer = MAETrainer(args.config)
+    trainer = Trainer(args.config)
     trainer.run()
 
 

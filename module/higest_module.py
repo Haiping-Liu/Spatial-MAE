@@ -1,13 +1,13 @@
 import torch
 import pytorch_lightning as pl
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
+from torch.optim.lr_scheduler import LambdaLR
 import math
 from typing import Dict
 import copy
 
-from model.higest import HiGeST, build_adjacency_matrix
-from model.loss import mask_loss, topology_loss
+from model.higest import HiGeST
+from model.loss import mask_loss, infonce_topology_loss
 from configs.config import Config
 
 
@@ -56,7 +56,6 @@ class HiGeSTLightning(pl.LightningModule):
                 teacher_param.data = self.ema_decay * teacher_param.data + (1 - self.ema_decay) * student_param.data
     
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Training step with gene-level masking and topology learning"""
         gene_ids = batch['gene_ids']
         gene_values = batch['gene_values']
         masked_values = batch['masked_values']
@@ -81,15 +80,15 @@ class HiGeSTLightning(pl.LightningModule):
         # Compute losses
         recon_losses = mask_loss(student_out)
         recon_loss = recon_losses['loss']
-        
-        # Build adjacency matrix dynamically
-        adj_matrix = build_adjacency_matrix(coords, k=self.k_neighbors)
-        
-        # Compute topology loss using BYOL-style prediction
-        topo_loss = topology_loss(
+
+        # Compute InfoNCE topology loss with gene similarity prior
+        topo_loss = infonce_topology_loss(
             student_out['cls_predicted'],  # Student: backbone → projector → predictor
             teacher_out['cls_projected'].detach(),  # Teacher: backbone → projector (stop grad)
-            adj_matrix
+            batch['gene_similarity'],  # Precomputed gene similarity matrix
+            batch['spatial_knn'],  # Precomputed spatial KNN indices
+            temperature=0.07,
+            n_bg_neg=10,
         )
         
         # Total loss with fixed topology weight
@@ -129,15 +128,15 @@ class HiGeSTLightning(pl.LightningModule):
         # Compute losses
         recon_losses = mask_loss(student_out)
         recon_loss = recon_losses['loss']
-        
-        # Build adjacency matrix
-        adj_matrix = build_adjacency_matrix(coords, k=self.k_neighbors)
-        
-        # Compute topology loss using BYOL-style prediction (same as training)
-        topo_loss = topology_loss(
+
+        # Compute InfoNCE topology loss (same as training)
+        topo_loss = infonce_topology_loss(
             student_out['cls_predicted'],  # Student: backbone → projector → predictor
             teacher_out['cls_projected'].detach(),  # Teacher: backbone → projector (stop grad)
-            adj_matrix
+            batch['gene_similarity'],  # Precomputed gene similarity matrix
+            batch['spatial_knn'],  # Precomputed spatial KNN indices
+            temperature=0.07,
+            n_bg_neg=10,
         )
 
         total_loss = recon_loss + self.lambda_topo * topo_loss
